@@ -74,6 +74,17 @@ const unsigned long MENU_TIMEOUT_MS = 3000;
 bool soundEnabled = true;
 
 // ==================================================
+// Alarm State
+// ==================================================
+
+bool alarmActive = false;
+unsigned long alarmStartedMillis = 0;
+unsigned long lastAlarmMillis = 0;
+
+const unsigned long ALARM_TIMEOUT_MS = 60 * 1000;
+const unsigned long ALARM_INTERVAL_MS = 1400;
+
+// ==================================================
 // Utility
 // ==================================================
 
@@ -134,6 +145,26 @@ void closeMenu() {
 }
 
 // ==================================================
+// Color
+// ==================================================
+
+uint16_t getThemeColor() {
+    if (timerState == STATE_TIME_UP) {
+        return RED;
+    }
+
+    if (timerState == STATE_PAUSED) {
+        return BLUE;
+    }
+
+    if (currentMode == TIMER_WORK) {
+        return ORANGE;
+    }
+
+    return GREEN;
+}
+
+// ==================================================
 // Sound
 // ==================================================
 
@@ -151,18 +182,6 @@ void playStartSound() {
 
 void playPauseSound() {
     playTone(600, 80);
-}
-
-void playTimeUpSound() {
-    if (!soundEnabled) {
-        return;
-    }
-
-    StickCP2.Speaker.tone(1200, 120);
-    delay(150);
-    StickCP2.Speaker.tone(1600, 120);
-    delay(150);
-    StickCP2.Speaker.tone(2000, 180);
 }
 
 void playNextSound() {
@@ -183,82 +202,126 @@ void playSelectSound() {
     playTone(1100, 60);
 }
 
+void playTamagotchiAlarmPattern() {
+    if (!soundEnabled) {
+        return;
+    }
+
+    // たまごっち風: 高めで短いピコピコ音
+    StickCP2.Speaker.tone(1800, 70);
+    delay(90);
+    StickCP2.Speaker.tone(2200, 70);
+    delay(90);
+    StickCP2.Speaker.tone(2600, 100);
+}
+
+void startAlarm() {
+    if (!soundEnabled) {
+        return;
+    }
+
+    alarmActive = true;
+    alarmStartedMillis = millis();
+    lastAlarmMillis = 0;
+}
+
+void stopAlarm() {
+    alarmActive = false;
+}
+
+void updateAlarm() {
+    if (!alarmActive) {
+        return;
+    }
+
+    if (!soundEnabled) {
+        stopAlarm();
+        return;
+    }
+
+    unsigned long now = millis();
+
+    if (now - alarmStartedMillis >= ALARM_TIMEOUT_MS) {
+        stopAlarm();
+        return;
+    }
+
+    if (lastAlarmMillis == 0 || now - lastAlarmMillis >= ALARM_INTERVAL_MS) {
+        lastAlarmMillis = now;
+        playTamagotchiAlarmPattern();
+    }
+}
+
 // ==================================================
-// Debug Display
+// Main Display: Simple HP Gauge Bar
 // ==================================================
 
-void drawDebugScreen() {
+void drawProgressBar() {
+    int totalSeconds = getTotalSecondsForCurrentMode();
+
+    if (totalSeconds <= 0) {
+        totalSeconds = 1;
+    }
+
+    int barX = 10;
+    int barY = 205;
+    int barW = 115;
+    int barH = 18;
+
+    int innerX = barX + 3;
+    int innerY = barY + 3;
+    int innerW = barW - 6;
+    int innerH = barH - 6;
+
+    int filledW = 0;
+
+    if (timerState == STATE_PAUSED) {
+        // 次の仕事開始待ち：青MAX
+        filledW = innerW;
+    } else if (timerState == STATE_TIME_UP) {
+        // 仕事終了：赤MAX
+        filledW = innerW;
+    } else if (currentMode == TIMER_BREAK) {
+        // 休憩中：回復ゲージ。左から右に増える。
+        int elapsedSeconds = totalSeconds - remainingSeconds;
+        filledW = (innerW * elapsedSeconds) / totalSeconds;
+    } else {
+        // 仕事中：消耗ゲージ。右から削れる。
+        filledW = (innerW * remainingSeconds) / totalSeconds;
+    }
+
+    if (filledW < 0) {
+        filledW = 0;
+    }
+
+    if (filledW > innerW) {
+        filledW = innerW;
+    }
+
+    // 枠だけ描く。背景は塗らない。
+    StickCP2.Display.drawRoundRect(barX, barY, barW, barH, 8, WHITE);
+
+    // 中身を黒で消す。
+    StickCP2.Display.fillRoundRect(innerX, innerY, innerW, innerH, 5, BLACK);
+
+    // 色付き部分だけ描く。
+    if (filledW > 0) {
+        StickCP2.Display.fillRoundRect(
+            innerX,
+            innerY,
+            filledW,
+            innerH,
+            5,
+            getThemeColor()
+        );
+    }
+}
+
+void drawMainScreen() {
     StickCP2.Display.fillScreen(BLACK);
 
-    int minutes = remainingSeconds / 60;
-    int seconds = remainingSeconds % 60;
-
-    TimerPreset preset = getCurrentPreset();
-
-    // Title
-    StickCP2.Display.setTextSize(2);
-    StickCP2.Display.setTextColor(WHITE);
-    StickCP2.Display.setCursor(10, 10);
-    StickCP2.Display.print("CORE TIMER");
-
-    // Preset
-    StickCP2.Display.setTextSize(1);
-    StickCP2.Display.setTextColor(WHITE);
-    StickCP2.Display.setCursor(10, 38);
-    StickCP2.Display.print("Preset: ");
-    StickCP2.Display.print(preset.name);
-    StickCP2.Display.print(" x");
-    StickCP2.Display.print(preset.sets);
-
-    // Mode
-    StickCP2.Display.setTextSize(2);
-    StickCP2.Display.setTextColor(WHITE);
-    StickCP2.Display.setCursor(10, 60);
-    StickCP2.Display.print("Mode:");
-
-    StickCP2.Display.setCursor(10, 85);
-    if (currentMode == TIMER_WORK) {
-        StickCP2.Display.setTextColor(RED);
-    } else {
-        StickCP2.Display.setTextColor(GREEN);
-    }
-    StickCP2.Display.print(getModeName());
-
-    // State
-    StickCP2.Display.setTextColor(WHITE);
-    StickCP2.Display.setCursor(10, 115);
-    StickCP2.Display.print("State:");
-
-    StickCP2.Display.setCursor(10, 140);
-    if (timerState == STATE_RUNNING) {
-        StickCP2.Display.setTextColor(YELLOW);
-    } else if (timerState == STATE_TIME_UP) {
-        StickCP2.Display.setTextColor(ORANGE);
-    } else {
-        StickCP2.Display.setTextColor(CYAN);
-    }
-    StickCP2.Display.print(getStateName());
-
-    // Time
-    StickCP2.Display.setTextColor(WHITE);
-    StickCP2.Display.setTextSize(3);
-    StickCP2.Display.setCursor(10, 172);
-    StickCP2.Display.printf("%02d:%02d", minutes, seconds);
-
-    // Sound
-    StickCP2.Display.setTextSize(1);
-    StickCP2.Display.setTextColor(WHITE);
-    StickCP2.Display.setCursor(10, 207);
-    StickCP2.Display.print("Sound: ");
-    StickCP2.Display.print(soundEnabled ? "ON" : "OFF");
-
-    // Guide
-    StickCP2.Display.setCursor(10, 225);
-    if (timerState == STATE_TIME_UP) {
-        StickCP2.Display.print("A:Next  B:Menu");
-    } else {
-        StickCP2.Display.print("A:Start/Pause B:Menu");
-    }
+    // 顔エリアは今は空白
+    drawProgressBar();
 }
 
 // ==================================================
@@ -341,7 +404,7 @@ void drawMenuOverlay() {
     const char* modeText = getModeName();
     const char* soundText = soundEnabled ? "ON" : "OFF";
 
-    uint16_t modeColor = currentMode == TIMER_WORK ? RED : GREEN;
+    uint16_t modeColor = currentMode == TIMER_WORK ? ORANGE : GREEN;
     uint16_t presetColor = WHITE;
     uint16_t soundColor = soundEnabled ? GREEN : RED;
 
@@ -374,9 +437,13 @@ void drawScreen() {
     if (uiMode == UI_MENU) {
         drawMenuOverlay();
     } else {
-        drawDebugScreen();
+        drawMainScreen();
     }
 }
+
+// ==================================================
+// Debug Log
+// ==================================================
 
 void debugLog(const char* message) {
     Serial.print("[");
@@ -392,7 +459,9 @@ void debugLog(const char* message) {
     Serial.print(" remain=");
     Serial.print(remainingSeconds);
     Serial.print(" sound=");
-    Serial.println(soundEnabled ? "ON" : "OFF");
+    Serial.print(soundEnabled ? "ON" : "OFF");
+    Serial.print(" alarm=");
+    Serial.println(alarmActive ? "ON" : "OFF");
 }
 
 // ==================================================
@@ -400,6 +469,8 @@ void debugLog(const char* message) {
 // ==================================================
 
 void startTimer() {
+    stopAlarm();
+
     timerState = STATE_RUNNING;
     lastTickMillis = millis();
 
@@ -425,6 +496,8 @@ void toggleTimer() {
 }
 
 void switchToNextMode() {
+    stopAlarm();
+
     if (currentMode == TIMER_WORK) {
         currentMode = TIMER_BREAK;
     } else {
@@ -440,6 +513,8 @@ void switchToNextMode() {
 }
 
 void resetCurrentMode() {
+    stopAlarm();
+
     resetRemainingTime();
     timerState = STATE_PAUSED;
 
@@ -447,13 +522,46 @@ void resetCurrentMode() {
     drawScreen();
 }
 
+void startBreakImmediately() {
+    stopAlarm();
+
+    currentMode = TIMER_BREAK;
+    resetRemainingTime();
+
+    timerState = STATE_RUNNING;
+    lastTickMillis = millis();
+
+    playStartSound();
+    debugLog("startBreakImmediately");
+    drawScreen();
+}
+
+void prepareNextWork() {
+    currentMode = TIMER_WORK;
+    resetRemainingTime();
+
+    timerState = STATE_PAUSED;
+
+    debugLog("prepareNextWork");
+    drawScreen();
+    startAlarm();
+}
+
 void timeUp() {
     remainingSeconds = 0;
-    timerState = STATE_TIME_UP;
 
-    debugLog("timeUp");
-    drawScreen();
-    playTimeUpSound();
+    if (currentMode == TIMER_WORK) {
+        // 仕事終了：赤MAXで止める。
+        // Aを押すと休憩が即開始する。
+        timerState = STATE_TIME_UP;
+
+        debugLog("workTimeUp");
+        drawScreen();
+        startAlarm();
+    } else {
+        // 休憩終了：青MAXに戻して、次の仕事開始待ち。
+        prepareNextWork();
+    }
 }
 
 void updateTimer() {
@@ -498,6 +606,8 @@ void nextMenuItem() {
 }
 
 void nextPreset() {
+    stopAlarm();
+
     currentPresetIndex++;
 
     if (currentPresetIndex >= PRESET_COUNT) {
@@ -512,10 +622,13 @@ void nextPreset() {
 void toggleSound() {
     soundEnabled = !soundEnabled;
 
+    if (!soundEnabled) {
+        stopAlarm();
+    }
+
     debugLog("toggleSound");
     drawScreen();
 
-    // OFFにした直後は当然鳴らない
     // ONにした直後だけ確認音を鳴らす
     if (soundEnabled) {
         playSelectSound();
@@ -543,8 +656,11 @@ void executeMenuItem() {
 
 void handleMainButtons() {
     if (StickCP2.BtnA.wasPressed()) {
+        stopAlarm();
+
         if (timerState == STATE_TIME_UP) {
-            switchToNextMode();
+            // 仕事終了後の赤状態から、休憩を即開始する。
+            startBreakImmediately();
         } else {
             toggleTimer();
         }
@@ -616,6 +732,7 @@ void loop() {
     handleButtons();
     updateTimer();
     updateMenuTimeout();
+    updateAlarm();
 
     delay(20);
 }
