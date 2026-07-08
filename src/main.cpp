@@ -1,64 +1,78 @@
 #include <Arduino.h>
 #include "M5StickCPlus2.h"
 
-// ===== テスト用 =====
+// ====================
+// Timer Settings
+// ====================
+
+// Debug用
 const int WORK_TIME = 10;
 const int BREAK_TIME = 5;
 const int EXTEND_TIME = 5;
 
-// ===== 本番用 =====
+// 本番用
 // const int WORK_TIME = 25 * 60;
 // const int BREAK_TIME = 5 * 60;
 // const int EXTEND_TIME = 5 * 60;
 
+// ====================
+// State
+// ====================
+
 enum TimerMode {
-    WORK,
-    BREAK
+    MODE_WORK,
+    MODE_BREAK
 };
 
-enum AppState {
-    PAUSED,
-    RUNNING,
-    TIME_UP
+enum TimerState {
+    STATE_PAUSED,
+    STATE_RUNNING,
+    STATE_TIME_UP
 };
 
-TimerMode currentMode = WORK;
-AppState appState = PAUSED;
+TimerMode currentMode = MODE_WORK;
+TimerState timerState = STATE_PAUSED;
 
 int remainingSeconds = WORK_TIME;
 unsigned long lastTickMillis = 0;
 
-// --------------------
-// 色
-// --------------------
+// ====================
+// Utility
+// ====================
 
-uint16_t getThemeColor() {
-    if (appState == TIME_UP) {
-        return ORANGE;
-    }
-
-    if (currentMode == WORK) {
-        return RED;
+const char* getModeName() {
+    if (currentMode == MODE_WORK) {
+        return "WORK";
     } else {
-        return GREEN;
+        return "BREAK";
     }
 }
 
-uint16_t getDarkThemeColor() {
-    if (appState == TIME_UP) {
-        return 0x8200;  // dark orange
-    }
-
-    if (currentMode == WORK) {
-        return 0x7800;  // dark red
+const char* getStateName() {
+    if (timerState == STATE_RUNNING) {
+        return "RUNNING";
+    } else if (timerState == STATE_PAUSED) {
+        return "PAUSED";
     } else {
-        return 0x03E0;  // dark green
+        return "TIME_UP";
     }
 }
 
-// --------------------
-// 音
-// --------------------
+int getTotalSecondsForCurrentMode() {
+    if (currentMode == MODE_WORK) {
+        return WORK_TIME;
+    } else {
+        return BREAK_TIME;
+    }
+}
+
+void resetRemainingTime() {
+    remainingSeconds = getTotalSecondsForCurrentMode();
+}
+
+// ====================
+// Sound
+// ====================
 
 void playStartSound() {
     StickCP2.Speaker.tone(1000, 80);
@@ -76,269 +90,220 @@ void playTimeUpSound() {
     StickCP2.Speaker.tone(2000, 180);
 }
 
-// --------------------
-// ｽﾀｯｸﾁｬﾝ風の大きい顔
-// --------------------
-
-void drawFaceBase(uint16_t themeColor) {
-    // 顔の外枠：画面のほぼ上半分いっぱい
-    StickCP2.Display.fillRoundRect(6, 10, 123, 170, 24, themeColor);
-    StickCP2.Display.drawRoundRect(6, 10, 123, 170, 24, WHITE);
-
-    // 顔の内側スクリーン
-    StickCP2.Display.fillRoundRect(18, 28, 99, 132, 18, BLACK);
-    StickCP2.Display.drawRoundRect(18, 28, 99, 132, 18, WHITE);
+void playNextSound() {
+    StickCP2.Speaker.tone(900, 80);
+    delay(100);
+    StickCP2.Speaker.tone(1300, 80);
 }
 
-void drawWorkFace() {
-    // 集中顔
-    StickCP2.Display.fillCircle(48, 82, 9, WHITE);
-    StickCP2.Display.fillCircle(88, 82, 9, WHITE);
-
-    StickCP2.Display.fillCircle(51, 84, 4, BLACK);
-    StickCP2.Display.fillCircle(85, 84, 4, BLACK);
-
-    // まゆ
-    StickCP2.Display.drawLine(36, 65, 58, 58, WHITE);
-    StickCP2.Display.drawLine(78, 58, 100, 65, WHITE);
-
-    // 口
-    StickCP2.Display.drawLine(54, 128, 82, 128, WHITE);
+void playExtendSound() {
+    StickCP2.Speaker.tone(800, 60);
+    delay(80);
+    StickCP2.Speaker.tone(1000, 60);
 }
 
-void drawBreakFace() {
-    // 休憩中の眠そうな顔
-    StickCP2.Display.drawLine(36, 86, 60, 86, WHITE);
-    StickCP2.Display.drawLine(76, 86, 100, 86, WHITE);
+// ====================
+// Debug Display
+// ====================
 
-    // ほっぺ
-    StickCP2.Display.fillCircle(38, 108, 6, PINK);
-    StickCP2.Display.fillCircle(98, 108, 6, PINK);
-
-    // 口
-    StickCP2.Display.drawLine(54, 124, 68, 134, WHITE);
-    StickCP2.Display.drawLine(68, 134, 82, 124, WHITE);
-}
-
-void drawPausedFace() {
-    // 待機中の普通顔
-    StickCP2.Display.fillCircle(48, 86, 8, WHITE);
-    StickCP2.Display.fillCircle(88, 86, 8, WHITE);
-
-    StickCP2.Display.fillCircle(48, 86, 3, BLACK);
-    StickCP2.Display.fillCircle(88, 86, 3, BLACK);
-
-    // にこ口
-    StickCP2.Display.drawLine(54, 124, 68, 134, WHITE);
-    StickCP2.Display.drawLine(68, 134, 82, 124, WHITE);
-}
-
-void drawTimeUpFace() {
-    // びっくり顔
-    StickCP2.Display.fillCircle(48, 82, 11, WHITE);
-    StickCP2.Display.fillCircle(88, 82, 11, WHITE);
-
-    StickCP2.Display.fillCircle(48, 82, 4, BLACK);
-    StickCP2.Display.fillCircle(88, 82, 4, BLACK);
-
-    StickCP2.Display.drawCircle(68, 128, 11, WHITE);
-
-    // 汗
-    StickCP2.Display.fillTriangle(104, 48, 114, 70, 96, 70, CYAN);
-}
-
-void drawStackChanFace() {
-    uint16_t themeColor = getThemeColor();
-
-    drawFaceBase(themeColor);
-
-    if (appState == TIME_UP) {
-        drawTimeUpFace();
-    } else if (appState == PAUSED) {
-        drawPausedFace();
-    } else if (currentMode == WORK) {
-        drawWorkFace();
-    } else {
-        drawBreakFace();
-    }
-}
-
-// --------------------
-// 残り時間バー
-// --------------------
-
-int getTotalSecondsForCurrentMode() {
-    if (currentMode == WORK) {
-        return WORK_TIME;
-    } else {
-        return BREAK_TIME;
-    }
-}
-
-void drawProgressBar() {
-    int totalSeconds = getTotalSecondsForCurrentMode();
-
-    if (totalSeconds <= 0) {
-        totalSeconds = 1;
-    }
-
-    int barX = 10;
-    int barY = 205;
-    int barW = 115;
-    int barH = 18;
-
-    int filledW = (barW * remainingSeconds) / totalSeconds;
-
-    if (filledW < 0) {
-        filledW = 0;
-    }
-
-    if (filledW > barW) {
-        filledW = barW;
-    }
-
-    // 枠
-    StickCP2.Display.drawRoundRect(barX, barY, barW, barH, 8, WHITE);
-
-    // 残り部分
-    if (filledW > 3) {
-        StickCP2.Display.fillRoundRect(
-            barX + 2,
-            barY + 2,
-            filledW - 4,
-            barH - 4,
-            6,
-            getThemeColor()
-        );
-    }
-
-    // 減った部分
-    if (filledW < barW - 3) {
-        StickCP2.Display.fillRoundRect(
-            barX + filledW,
-            barY + 2,
-            barW - filledW - 2,
-            barH - 4,
-            6,
-            getDarkThemeColor()
-        );
-    }
-}
-
-void drawStatusDot() {
-    // 右上の小さい状態ドット
-    uint16_t color;
-
-    if (appState == RUNNING) {
-        color = YELLOW;
-    } else if (appState == PAUSED) {
-        color = CYAN;
-    } else {
-        color = ORANGE;
-    }
-
-    StickCP2.Display.fillCircle(118, 22, 5, color);
-}
-
-void drawScreen() {
+void drawDebugScreen() {
     StickCP2.Display.fillScreen(BLACK);
 
-    drawStackChanFace();
-    drawStatusDot();
-    drawProgressBar();
-}
+    int minutes = remainingSeconds / 60;
+    int seconds = remainingSeconds % 60;
 
-// --------------------
-// タイマー操作
-// --------------------
+    StickCP2.Display.setTextSize(2);
+    StickCP2.Display.setTextColor(WHITE);
 
-void resetTimeForCurrentMode() {
-    if (currentMode == WORK) {
-        remainingSeconds = WORK_TIME;
+    StickCP2.Display.setCursor(10, 15);
+    StickCP2.Display.print("CORE TIMER");
+
+    StickCP2.Display.setCursor(10, 55);
+    StickCP2.Display.print("Mode:");
+    StickCP2.Display.setCursor(10, 80);
+
+    if (currentMode == MODE_WORK) {
+        StickCP2.Display.setTextColor(RED);
     } else {
-        remainingSeconds = BREAK_TIME;
+        StickCP2.Display.setTextColor(GREEN);
+    }
+
+    StickCP2.Display.print(getModeName());
+
+    StickCP2.Display.setTextColor(WHITE);
+    StickCP2.Display.setCursor(10, 115);
+    StickCP2.Display.print("State:");
+    StickCP2.Display.setCursor(10, 140);
+
+    if (timerState == STATE_RUNNING) {
+        StickCP2.Display.setTextColor(YELLOW);
+    } else if (timerState == STATE_TIME_UP) {
+        StickCP2.Display.setTextColor(ORANGE);
+    } else {
+        StickCP2.Display.setTextColor(CYAN);
+    }
+
+    StickCP2.Display.print(getStateName());
+
+    StickCP2.Display.setTextColor(WHITE);
+    StickCP2.Display.setTextSize(3);
+    StickCP2.Display.setCursor(10, 175);
+    StickCP2.Display.printf("%02d:%02d", minutes, seconds);
+
+    StickCP2.Display.setTextSize(1);
+    StickCP2.Display.setCursor(10, 220);
+
+    if (timerState == STATE_TIME_UP) {
+        StickCP2.Display.print("A:Next  B:+Time");
+    } else {
+        StickCP2.Display.print("A:Start/Pause B:+Time");
     }
 }
 
-void goNextMode() {
-    if (currentMode == WORK) {
-        currentMode = BREAK;
-    } else {
-        currentMode = WORK;
-    }
-
-    resetTimeForCurrentMode();
-    appState = PAUSED;
-    drawScreen();
+void debugLog(const char* message) {
+    Serial.print("[");
+    Serial.print(millis());
+    Serial.print("] ");
+    Serial.print(message);
+    Serial.print(" | mode=");
+    Serial.print(getModeName());
+    Serial.print(" state=");
+    Serial.print(getStateName());
+    Serial.print(" remain=");
+    Serial.println(remainingSeconds);
 }
 
-void extendTime() {
+// ====================
+// Core Timer Actions
+// ====================
+
+void startTimer() {
+    timerState = STATE_RUNNING;
+    lastTickMillis = millis();
+
+    playStartSound();
+    debugLog("startTimer");
+    drawDebugScreen();
+}
+
+void pauseTimer() {
+    timerState = STATE_PAUSED;
+
+    playPauseSound();
+    debugLog("pauseTimer");
+    drawDebugScreen();
+}
+
+void toggleTimer() {
+    if (timerState == STATE_RUNNING) {
+        pauseTimer();
+    } else if (timerState == STATE_PAUSED) {
+        startTimer();
+    }
+}
+
+void extendTimer() {
     remainingSeconds += EXTEND_TIME;
 
-    if (appState == TIME_UP) {
-        appState = RUNNING;
+    if (timerState == STATE_TIME_UP) {
+        timerState = STATE_RUNNING;
         lastTickMillis = millis();
-        playStartSound();
     }
 
-    drawScreen();
+    playExtendSound();
+    debugLog("extendTimer");
+    drawDebugScreen();
 }
 
-// --------------------
+void switchToNextMode() {
+    if (currentMode == MODE_WORK) {
+        currentMode = MODE_BREAK;
+    } else {
+        currentMode = MODE_WORK;
+    }
+
+    resetRemainingTime();
+    timerState = STATE_PAUSED;
+
+    playNextSound();
+    debugLog("switchToNextMode");
+    drawDebugScreen();
+}
+
+void timeUp() {
+    remainingSeconds = 0;
+    timerState = STATE_TIME_UP;
+
+    debugLog("timeUp");
+    drawDebugScreen();
+    playTimeUpSound();
+}
+
+void updateTimer() {
+    if (timerState != STATE_RUNNING) {
+        return;
+    }
+
+    unsigned long now = millis();
+
+    if (now - lastTickMillis < 1000) {
+        return;
+    }
+
+    lastTickMillis = now;
+
+    if (remainingSeconds > 0) {
+        remainingSeconds--;
+        debugLog("tick");
+        drawDebugScreen();
+    }
+
+    if (remainingSeconds <= 0) {
+        timeUp();
+    }
+}
+
+// ====================
+// Button Handling
+// ====================
+
+void handleButtons() {
+    if (StickCP2.BtnA.wasPressed()) {
+        if (timerState == STATE_TIME_UP) {
+            switchToNextMode();
+        } else {
+            toggleTimer();
+        }
+    }
+
+    if (StickCP2.BtnB.wasPressed()) {
+        extendTimer();
+    }
+}
+
+// ====================
 // setup / loop
-// --------------------
+// ====================
 
 void setup() {
     auto cfg = M5.config();
     StickCP2.begin(cfg);
 
+    Serial.begin(115200);
+    delay(500);
+
     StickCP2.Display.setRotation(0);
     StickCP2.Display.setBrightness(80);
 
-    drawScreen();
+    debugLog("setup");
+    drawDebugScreen();
 }
 
 void loop() {
     StickCP2.update();
 
-    if (StickCP2.BtnA.wasPressed()) {
-        if (appState == TIME_UP) {
-            goNextMode();
-        } else if (appState == RUNNING) {
-            appState = PAUSED;
-            playPauseSound();
-            drawScreen();
-        } else {
-            appState = RUNNING;
-            lastTickMillis = millis();
-            playStartSound();
-            drawScreen();
-        }
-    }
-
-    if (StickCP2.BtnB.wasPressed()) {
-        extendTime();
-    }
-
-    if (appState == RUNNING) {
-        unsigned long now = millis();
-
-        if (now - lastTickMillis >= 1000) {
-            lastTickMillis = now;
-
-            if (remainingSeconds > 0) {
-                remainingSeconds--;
-                drawScreen();
-            }
-
-            if (remainingSeconds <= 0) {
-                remainingSeconds = 0;
-                appState = TIME_UP;
-                drawScreen();
-                playTimeUpSound();
-            }
-        }
-    }
+    handleButtons();
+    updateTimer();
 
     delay(20);
 }
