@@ -1,256 +1,9 @@
 #include <Arduino.h>
 #include "M5StickCPlus2.h"
 
-// ==================================================
-// Presets
-// ==================================================
-
-struct TimerPreset {
-    const char* name;
-    int workSeconds;
-    int breakSeconds;
-    int sets;
-};
-
-TimerPreset presets[] = {
-    {"DEBUG", 10, 5, 1},
-    {"LIGHT", 15 * 60, 5 * 60, 3},
-    {"NORMAL", 25 * 60, 5 * 60, 4},
-    {"DEEP", 50 * 60, 10 * 60, 2},
-};
-
-const int PRESET_COUNT = sizeof(presets) / sizeof(presets[0]);
-
-int currentPresetIndex = 0;
-
-// ==================================================
-// Timer State
-// ==================================================
-
-enum TimerMode {
-    TIMER_WORK,
-    TIMER_BREAK
-};
-
-enum TimerState {
-    STATE_PAUSED,
-    STATE_RUNNING,
-    STATE_TIME_UP
-};
-
-TimerMode currentMode = TIMER_WORK;
-TimerState timerState = STATE_PAUSED;
-
-int remainingSeconds = 0;
-unsigned long lastTickMillis = 0;
-
-// ==================================================
-// UI State
-// ==================================================
-
-enum UiMode {
-    UI_MAIN,
-    UI_MENU
-};
-
-enum MenuItem {
-    MENU_MODE,
-    MENU_PRESET,
-    MENU_SOUND
-};
-
-UiMode uiMode = UI_MAIN;
-
-int currentMenuIndex = 0;
-const int MENU_COUNT = 3;
-
-unsigned long lastUiActionMillis = 0;
-const unsigned long MENU_TIMEOUT_MS = 3000;
-
-// ==================================================
-// Settings
-// ==================================================
-
-bool soundEnabled = true;
-
-// ==================================================
-// Alarm State
-// ==================================================
-
-bool alarmActive = false;
-unsigned long alarmStartedMillis = 0;
-unsigned long lastAlarmMillis = 0;
-
-const unsigned long ALARM_TIMEOUT_MS = 60 * 1000;
-const unsigned long ALARM_INTERVAL_MS = 1400;
-
-// ==================================================
-// Utility
-// ==================================================
-
-TimerPreset getCurrentPreset() {
-    return presets[currentPresetIndex];
-}
-
-const char* getModeName() {
-    if (currentMode == TIMER_WORK) {
-        return "WORK";
-    } else {
-        return "BREAK";
-    }
-}
-
-const char* getStateName() {
-    if (timerState == STATE_RUNNING) {
-        return "RUNNING";
-    } else if (timerState == STATE_PAUSED) {
-        return "PAUSED";
-    } else {
-        return "TIME_UP";
-    }
-}
-
-int getWorkSeconds() {
-    return presets[currentPresetIndex].workSeconds;
-}
-
-int getBreakSeconds() {
-    return presets[currentPresetIndex].breakSeconds;
-}
-
-int getTotalSecondsForCurrentMode() {
-    if (currentMode == TIMER_WORK) {
-        return getWorkSeconds();
-    } else {
-        return getBreakSeconds();
-    }
-}
-
-void resetRemainingTime() {
-    remainingSeconds = getTotalSecondsForCurrentMode();
-}
-
-void refreshMenuTimeout() {
-    lastUiActionMillis = millis();
-}
-
-void openMenu() {
-    uiMode = UI_MENU;
-    currentMenuIndex = MENU_MODE;
-    refreshMenuTimeout();
-}
-
-void closeMenu() {
-    uiMode = UI_MAIN;
-}
-
-// ==================================================
-// Color
-// ==================================================
-
-uint16_t getThemeColor() {
-    if (timerState == STATE_TIME_UP) {
-        return RED;
-    }
-
-    if (timerState == STATE_PAUSED) {
-        return BLUE;
-    }
-
-    if (currentMode == TIMER_WORK) {
-        return ORANGE;
-    }
-
-    return GREEN;
-}
-
-// ==================================================
-// Sound
-// ==================================================
-
-void playTone(int freq, int duration) {
-    if (!soundEnabled) {
-        return;
-    }
-
-    StickCP2.Speaker.tone(freq, duration);
-}
-
-void playStartSound() {
-    playTone(1000, 80);
-}
-
-void playPauseSound() {
-    playTone(600, 80);
-}
-
-void playNextSound() {
-    if (!soundEnabled) {
-        return;
-    }
-
-    StickCP2.Speaker.tone(900, 80);
-    delay(100);
-    StickCP2.Speaker.tone(1300, 80);
-}
-
-void playMenuSound() {
-    playTone(700, 50);
-}
-
-void playSelectSound() {
-    playTone(1100, 60);
-}
-
-void playTamagotchiAlarmPattern() {
-    if (!soundEnabled) {
-        return;
-    }
-
-    // たまごっち風: 高めで短いピコピコ音
-    StickCP2.Speaker.tone(1800, 70);
-    delay(90);
-    StickCP2.Speaker.tone(2200, 70);
-    delay(90);
-    StickCP2.Speaker.tone(2600, 100);
-}
-
-void startAlarm() {
-    if (!soundEnabled) {
-        return;
-    }
-
-    alarmActive = true;
-    alarmStartedMillis = millis();
-    lastAlarmMillis = 0;
-}
-
-void stopAlarm() {
-    alarmActive = false;
-}
-
-void updateAlarm() {
-    if (!alarmActive) {
-        return;
-    }
-
-    if (!soundEnabled) {
-        stopAlarm();
-        return;
-    }
-
-    unsigned long now = millis();
-
-    if (now - alarmStartedMillis >= ALARM_TIMEOUT_MS) {
-        stopAlarm();
-        return;
-    }
-
-    if (lastAlarmMillis == 0 || now - lastAlarmMillis >= ALARM_INTERVAL_MS) {
-        lastAlarmMillis = now;
-        playTamagotchiAlarmPattern();
-    }
-}
+#include "app_state.h"
+#include "sound.h"
+#include "face.h"
 
 // ==================================================
 // Main Display: Simple HP Gauge Bar
@@ -320,7 +73,7 @@ void drawProgressBar() {
 void drawMainScreen() {
     StickCP2.Display.fillScreen(BLACK);
 
-    // 顔エリアは今は空白
+    drawFace();
     drawProgressBar();
 }
 
@@ -439,29 +192,6 @@ void drawScreen() {
     } else {
         drawMainScreen();
     }
-}
-
-// ==================================================
-// Debug Log
-// ==================================================
-
-void debugLog(const char* message) {
-    Serial.print("[");
-    Serial.print(millis());
-    Serial.print("] ");
-    Serial.print(message);
-    Serial.print(" | preset=");
-    Serial.print(getCurrentPreset().name);
-    Serial.print(" mode=");
-    Serial.print(getModeName());
-    Serial.print(" state=");
-    Serial.print(getStateName());
-    Serial.print(" remain=");
-    Serial.print(remainingSeconds);
-    Serial.print(" sound=");
-    Serial.print(soundEnabled ? "ON" : "OFF");
-    Serial.print(" alarm=");
-    Serial.println(alarmActive ? "ON" : "OFF");
 }
 
 // ==================================================
@@ -720,7 +450,7 @@ void setup() {
     StickCP2.Display.setRotation(0);
     StickCP2.Display.setBrightness(80);
 
-    resetRemainingTime();
+    initAppState();
 
     debugLog("setup");
     drawScreen();
